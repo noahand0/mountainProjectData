@@ -29,16 +29,22 @@ def main() -> None:
         action="store_true",
         help="Skip fetching tick/stats pages (faster, less data)",
     )
+    p.add_argument(
+        "--deep-routes",
+        action="store_true",
+        help="Fetch each route's individual page for full detail (description, FA, etc.); "
+             "by default routes are extracted from the area listing page only",
+    )
     args = p.parse_args()
 
     conn = db.get_conn()
     db.init_db(conn)
 
     print(f"Starting crawl: {args.url}")
-    print(f"Delay: {args.delay}s | Skip ticks: {args.skip_ticks}")
+    print(f"Delay: {args.delay}s | Skip ticks: {args.skip_ticks} | Deep routes: {args.deep_routes}")
     print("Data will be written to climbing.db\n")
 
-    crawler = Crawler(conn, delay=args.delay, skip_ticks=args.skip_ticks)
+    crawler = Crawler(conn, delay=args.delay, skip_ticks=args.skip_ticks, deep_routes=args.deep_routes)
     try:
         crawler.crawl_area(args.url)
     except KeyboardInterrupt:

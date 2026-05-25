@@ -16,10 +16,11 @@ MP_STATS_BASE = "https://www.mountainproject.com/route/stats/"
 
 
 class Crawler:
-    def __init__(self, conn, delay: float = 2.0, skip_ticks: bool = False):
+    def __init__(self, conn, delay: float = 2.0, skip_ticks: bool = False, deep_routes: bool = False):
         self.conn = conn
         self.fetcher = Fetcher(conn, delay=delay)
         self.skip_ticks = skip_ticks
+        self.deep_routes = deep_routes  # fetch individual route pages for full detail
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -57,8 +58,16 @@ class Crawler:
                 if child_id and child_id not in visited_areas:
                     area_queue.append((child_url, area_id))
 
-            for route_url in route_urls:
-                self._crawl_route(route_url, area_id)
+            if self.deep_routes:
+                for route_url in route_urls:
+                    self._crawl_route(route_url, area_id)
+            else:
+                # Extract route data directly from the already-fetched area page
+                routes = parser.parse_routes_from_area(html, area_id)
+                for route_dict in routes:
+                    db.upsert_route(self.conn, route_dict)
+                if routes:
+                    print(f"  extracted {len(routes)} routes from area page")
 
     # ------------------------------------------------------------------
     # Route crawl

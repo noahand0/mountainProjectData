@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
 MP_BASE = "https://www.mountainproject.com"
 
@@ -73,9 +73,10 @@ def parse_area(html: str, url: str) -> tuple[dict, list[str], list[str]]:
             except (KeyError, ValueError):
                 pass
 
-    # --- Breadcrumb area IDs (these are parents; exclude from children) ---
+    # --- Breadcrumb area IDs (ancestors; exclude from children) ---
+    # MP's breadcrumb is in div.mb-half.small.text-warm inside the right column.
     breadcrumb_ids: set[int] = set()
-    breadcrumb = soup.find(class_=re.compile(r"breadcrumb", re.I))
+    breadcrumb = soup.find("div", class_=lambda c: c and "mb-half" in c and "text-warm" in c)
     if breadcrumb:
         for a in breadcrumb.find_all("a", href=re.compile(r"/area/\d+")):
             bid = _extract_id(a["href"])
@@ -83,41 +84,39 @@ def parse_area(html: str, url: str) -> tuple[dict, list[str], list[str]]:
                 breadcrumb_ids.add(bid)
 
     # --- Child area URLs ---
-    # MP renders sub-areas in a left-nav list; fall back to any /area/ link not
-    # in the breadcrumb.
+    # MP lists direct sub-areas in the left sidebar (div.mp-sidebar / div.left-nav).
+    # This is the authoritative list; the route table only shows a curated subset.
     child_area_urls: list[str] = []
     seen_areas: set[int] = set()
 
-    area_nav = (
-        soup.find("div", id="left-nav-areas")
-        or soup.find("div", class_=re.compile(r"lef-nav-areas", re.I))
-        or soup.find("div", id=re.compile(r"left-nav", re.I))
-    )
-    link_source = area_nav if area_nav else soup
+    sidebar = soup.find("div", class_="mp-sidebar") or soup.find("div", class_=lambda c: c and "left-nav" in c)
+    if sidebar:
+        for a in sidebar.find_all("a", href=re.compile(r"/area/\d+")):
+            href = _clean(_abs_url(a["href"]))
+            child_id = _extract_id(href)
+            if (
+                child_id
+                and child_id != area_id
+                and child_id not in breadcrumb_ids
+                and child_id not in seen_areas
+            ):
+                child_area_urls.append(href)
+                seen_areas.add(child_id)
 
-    for a in link_source.find_all("a", href=re.compile(r"/area/\d+")):
-        href = _clean(_abs_url(a["href"]))
-        child_id = _extract_id(href)
-        if (
-            child_id
-            and child_id != area_id
-            and child_id not in breadcrumb_ids
-            and child_id not in seen_areas
-        ):
-            child_area_urls.append(href)
-            seen_areas.add(child_id)
-
-    # --- Route URLs ---
-    # Routes are listed in a table in the main content area
+    # --- Route URLs (used by --deep-routes mode) ---
+    # Leaf pages use class "width100"; parent pages use "route-table" and defer
+    # route collection to when we visit each child area.
     route_urls: list[str] = []
     seen_routes: set[int] = set()
 
-    for a in soup.find_all("a", href=re.compile(r"/route/\d+")):
-        href = _clean(_abs_url(a["href"]))
-        route_id = _extract_id(href)
-        if route_id and route_id not in seen_routes:
-            route_urls.append(href)
-            seen_routes.add(route_id)
+    leaf_table = soup.find("table", class_="width100")
+    if leaf_table:
+        for a in leaf_table.find_all("a", href=re.compile(r"/route/\d+")):
+            href = _clean(_abs_url(a["href"]))
+            route_id = _extract_id(href)
+            if route_id and route_id not in seen_routes:
+                route_urls.append(href)
+                seen_routes.add(route_id)
 
     area = {
         "area_id": area_id,
@@ -136,12 +135,6 @@ def parse_area(html: str, url: str) -> tuple[dict, list[str], list[str]]:
 # Route page parser
 # ---------------------------------------------------------------------------
 
-def _parse_int(text: str | None) -> int | None:
-    if not text:
-        return None
-    m = re.search(r"\d+", text)
-    return int(m.group()) if m else None
-
 
 def parse_route(html: str, url: str) -> dict:
     soup = BeautifulSoup(html, "lxml")
@@ -153,25 +146,30 @@ def parse_route(html: str, url: str) -> dict:
 
     # --- Grade ---
     # MP shows YDS grades in <span class="rateYDS"> and V-scale in <span class="rateHueco">
+    # Grade — rateYDS span may contain a child <a>YDS</a> label link; use direct
+    # text nodes only to avoid appending that label to the grade string.
     grade_yds_tag = soup.find("span", class_="rateYDS")
     grade_vscale_tag = soup.find("span", class_="rateHueco")
-    grade_yds = grade_yds_tag.get_text(strip=True) if grade_yds_tag else None
-    grade_vscale = grade_vscale_tag.get_text(strip=True) if grade_vscale_tag else None
+    grade_yds = (
+        "".join(t for t in grade_yds_tag.children if isinstance(t, NavigableString)).strip()
+        if grade_yds_tag else None
+    ) or None
+    grade_vscale = (
+        "".join(t for t in grade_vscale_tag.children if isinstance(t, NavigableString)).strip()
+        if grade_vscale_tag else None
+    ) or None
 
-    # grade_raw: concatenate both if both exist (e.g. "5.10a V3")
     parts = [g for g in [grade_yds, grade_vscale] if g]
     grade_raw = " ".join(parts) if parts else None
 
     # --- Route type ---
-    # e.g. "Sport", "Trad", "Boulder", "TR", "Aid", "Mixed", "Ice"
-    # MP puts this in a <span> near the grade; often inside a div with class "inline-block"
-    type_tag = soup.find("span", class_=re.compile(r"route-type", re.I))
-    if not type_tag:
-        # Fallback: look for the type text inside the table-like stat block
-        type_tag = soup.find("tr", string=re.compile(r"Type", re.I))
-        if type_tag:
-            type_tag = type_tag.find_next("td")
-    route_type = type_tag.get_text(strip=True) if type_tag else None
+    # The type ("Boulder", "Sport", etc.) is the second CSS class on the route-type
+    # span, not its text content (which is the grade).
+    type_tag = soup.find("span", class_=re.compile(r"\broute-type\b", re.I))
+    route_type = None
+    if type_tag:
+        extra = [c for c in type_tag.get("class", []) if c.lower() != "route-type"]
+        route_type = extra[0] if extra else None
 
     # --- Length and pitches ---
     length_ft = None
@@ -213,15 +211,10 @@ def parse_route(html: str, url: str) -> dict:
         if votes_m:
             star_votes = int(votes_m.group(1).replace(",", ""))
 
-    # --- Tick / todo counts from the page sidebar ---
+    # tick_count and todo_count are rendered via JavaScript on the stats page
+    # and are not present in the static HTML — left as None.
     tick_count = None
     todo_count = None
-    tick_label = soup.find(string=re.compile(r"Ticks?", re.I))
-    if tick_label:
-        tick_count = _parse_int(tick_label.parent.get_text())
-    todo_label = soup.find(string=re.compile(r"To-?do", re.I))
-    if todo_label:
-        todo_count = _parse_int(todo_label.parent.get_text())
 
     return {
         "route_id": route_id,
@@ -247,15 +240,95 @@ def parse_route(html: str, url: str) -> dict:
 
 def _extract_section(soup: BeautifulSoup, label: str) -> str | None:
     """Find a labeled content section (Description, Protection, etc.)."""
-    header = soup.find(
-        ["h2", "h3", "h4"],
-        string=re.compile(rf"\b{label}\b", re.I),
+    # Use get_text() matching because MP's headers contain nested edit links,
+    # so string= (which requires an exact NavigableString) never matches.
+    header = next(
+        (h for h in soup.find_all(["h2", "h3", "h4"])
+         if re.search(rf"\b{label}\b", h.get_text(), re.I)),
+        None,
     )
     if not header:
         return None
-    # Content is usually in the next sibling div or p
     sibling = header.find_next_sibling(["div", "p"])
     return sibling.get_text(separator="\n", strip=True) if sibling else None
+
+
+# ---------------------------------------------------------------------------
+# Lightweight route extraction from the area listing table
+# (no per-route HTTP fetch required)
+# ---------------------------------------------------------------------------
+
+def parse_routes_from_area(html: str, area_id: int) -> list[dict]:
+    """
+    Extract basic route data from the area page's width100 table.
+    Returns route dicts suitable for db.upsert_route.
+    Missing fields (description, FA, ticks…) are left None.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    table = soup.find("table", class_="width100")
+    if not table:
+        return []
+
+    routes = []
+    now = _now()
+
+    for row in table.find_all("tr"):
+        link = row.find("a", href=re.compile(r"/route/\d+"))
+        if not link:
+            continue
+
+        route_url = _clean(_abs_url(link["href"]))
+        route_id = _extract_id(route_url)
+        if not route_id:
+            continue
+
+        name = link.get_text(strip=True)
+
+        # Grade — boulders use rateYDS for V-scale on the listing page
+        grade_tag = row.find("span", class_="rateYDS")
+        grade_yds = grade_tag.get_text(strip=True) if grade_tag else None
+        hueco_tag = row.find("span", class_="rateHueco")
+        grade_vscale = hueco_tag.get_text(strip=True) if hueco_tag else None
+        parts = [g for g in [grade_yds, grade_vscale] if g]
+        grade_raw = " ".join(parts) if parts else None
+
+        # Type — second class on the route-type span, e.g. "Boulder" or "Sport"
+        type_span = row.find("span", class_=re.compile(r"\broute-type\b"))
+        route_type = None
+        if type_span:
+            extra = [c for c in type_span.get("class", []) if c != "route-type"]
+            route_type = extra[0] if extra else None
+
+        # Stars — count filled/half SVG images inside scoreStars
+        stars_span = row.find("span", class_="scoreStars")
+        avg_stars = None
+        if stars_span:
+            full = len(stars_span.find_all("img", src=re.compile(r"starBlue\.svg$")))
+            half = len(stars_span.find_all("img", src=re.compile(r"starBlueHalf\.svg$")))
+            avg_stars = full + 0.5 * half if (full or half) else None
+
+        routes.append({
+            "route_id": route_id,
+            "area_id": area_id,
+            "name": name,
+            "url": route_url,
+            "type": route_type,
+            "grade_yds": grade_yds,
+            "grade_vscale": grade_vscale,
+            "grade_raw": grade_raw,
+            "length_ft": None,
+            "pitches": None,
+            "fa": None,
+            "description": None,
+            "protection": None,
+            "avg_stars": avg_stars,
+            "star_votes": None,
+            "tick_count": None,
+            "todo_count": None,
+            "scraped_at": now,
+        })
+
+    return routes
 
 
 # ---------------------------------------------------------------------------

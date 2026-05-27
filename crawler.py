@@ -84,7 +84,7 @@ class Crawler:
 
         print(f"  [route] {route_url}")
         try:
-            html = self.fetcher.fetch(route_url)
+            html = self.fetcher.fetch_js(route_url)
         except Exception as e:
             print(f"    ERROR fetching route: {e}")
             return
@@ -99,33 +99,42 @@ class Crawler:
             db.replace_route_comments(self.conn, comments)
 
         if not self.skip_ticks:
-            self._crawl_ticks(route_id)
+            self._crawl_ticks(route_id, route_url)
 
     # ------------------------------------------------------------------
     # Ticks crawl  (/route/stats/{id}?page=N)
     # ------------------------------------------------------------------
 
-    def _crawl_ticks(self, route_id: int) -> None:
+    def _crawl_ticks(self, route_id: int, route_url: str) -> None:
+        # Build the stats URL with the name slug so MP returns server-rendered HTML.
+        # route_url looks like /route/{id}/{slug}; stats URL is /route/stats/{id}/{slug}
+        slug = route_url.rstrip("/").split("/")[-1]
+        stats_base = f"{MP_STATS_BASE}{route_id}/{slug}"
+
         all_ticks = []
         page = 1
 
         while True:
-            url = f"{MP_STATS_BASE}{route_id}"
+            url = stats_base
             if page > 1:
                 url += f"?page={page}"
 
             print(f"    [ticks] page {page}: {url}")
             try:
-                html = self.fetcher.fetch(url)
+                html = self.fetcher.fetch_js(url)
             except Exception as e:
                 print(f"      ERROR fetching ticks: {e}")
                 break
 
             ticks = parser.parse_ticks(html, route_id)
-            if not ticks:
-                break
+            suggested = parser.parse_suggested_ratings(html, route_id)
+            tick_count, todo_count = parser.parse_stats_counts(html)
 
             all_ticks.extend(ticks)
+
+            if suggested:
+                db.replace_suggested_ratings(self.conn, suggested)
+            db.update_route_counts(self.conn, route_id, tick_count, todo_count)
 
             # Stop if this page looks like the last one (MP typically shows
             # a "next" link when there are more pages)

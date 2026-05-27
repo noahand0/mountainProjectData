@@ -332,76 +332,107 @@ def parse_routes_from_area(html: str, area_id: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Ticks/stats page parser  (/route/stats/{route_id})
+# Stats page parsers  (/route/stats/{route_id}/{slug})
+#
+# The rendered page has four table.table-striped elements:
+#   tr[id^="stars."]   — individual star ratings
+#   tr[id^="ratings."] — suggested grades
+#   tr[id^="ticks."]   — logged ticks (date, style, comment)
+#   (no id prefix)     — to-do list users
 # ---------------------------------------------------------------------------
 
 def parse_ticks(html: str, route_id: int) -> list[dict]:
-    """
-    Parse the /route/stats/{id} page.
-    Returns a list of tick dicts.
-    """
+    """Parse logged ticks from the stats page. Returns a list of tick dicts."""
     soup = BeautifulSoup(html, "lxml")
     ticks = []
     now = _now()
+    seen = set()
 
-    # Ticks are in a table; each row is one tick entry
-    # Columns (approximate): Date | User | Style/Type | Stars | Comment
-    for row in soup.select("table tr"):
+    for row in soup.select("tr[id^='ticks.']"):
         cells = row.find_all("td")
         if len(cells) < 2:
             continue
 
-        date_climbed = cells[0].get_text(strip=True) or None
+        # Col 0: user link or <strong>Private Tick</strong>
+        user_link = cells[0].find("a")
+        author = user_link.get_text(strip=True) if user_link else None
 
-        author_link = cells[1].find("a")
-        author = author_link.get_text(strip=True) if author_link else cells[1].get_text(strip=True)
+        # Col 1: <strong>Date</strong> · Style. Comment text
+        date_tag = cells[1].find("strong")
+        date_climbed = date_tag.get_text(strip=True) if date_tag else None
 
-        tick_type = cells[2].get_text(strip=True) if len(cells) > 2 else None
+        # Everything after the date tag is " · Style. Optional comment."
+        tick_type = None
+        comment = None
+        cell_text = cells[1].get_text(separator=" ", strip=True)
+        if date_climbed:
+            after_date = cell_text[len(date_climbed):].strip().lstrip("·•").strip()
+            if after_date and "No names/notes" not in after_date:
+                # Split "Send. Rest of comment" into type and comment
+                dot_idx = after_date.find(". ")
+                if dot_idx != -1:
+                    tick_type = after_date[:dot_idx].strip() or None
+                    comment = after_date[dot_idx + 2:].strip() or None
+                else:
+                    tick_type = after_date.rstrip(".").strip() or None
 
-        stars = None
-        if len(cells) > 3:
-            stars = _count_stars(cells[3])
-
-        comment = cells[4].get_text(strip=True) if len(cells) > 4 else None
-
-        if not author and not date_climbed:
+        # Deduplicate by (author, date_climbed, tick_type)
+        key = (author, date_climbed, tick_type)
+        if key in seen:
             continue
+        seen.add(key)
 
-        ticks.append(
-            {
-                "route_id": route_id,
-                "author": author or None,
-                "date_climbed": date_climbed,
-                "tick_type": tick_type or None,
-                "stars": stars,
-                "comment": comment or None,
-                "scraped_at": now,
-            }
-        )
+        ticks.append({
+            "route_id": route_id,
+            "author": author,
+            "date_climbed": date_climbed,
+            "tick_type": tick_type,
+            "stars": None,
+            "comment": comment,
+            "scraped_at": now,
+        })
 
     return ticks
 
 
-def _count_stars(cell) -> int | None:
-    """
-    Count filled stars in a table cell.
-    MP renders stars as <img> tags or <span> elements with a class like
-    'fa-star' (filled) vs 'fa-star-o' (empty). Adapt if needed.
-    """
-    # Try Font Awesome icon approach
-    filled = cell.find_all(class_=re.compile(r"\bfa-star\b(?!.*-o)", re.I))
-    if filled:
-        return len(filled)
+def parse_suggested_ratings(html: str, route_id: int) -> list[dict]:
+    """Parse suggested grade ratings from the stats page."""
+    soup = BeautifulSoup(html, "lxml")
+    now = _now()
+    ratings = []
 
-    # Try counting star images (some MP pages use img tags)
-    imgs = cell.find_all("img", src=re.compile(r"star", re.I))
-    if imgs:
-        return len(imgs)
+    for row in soup.select("tr[id^='ratings.']"):
+        cells = row.find_all("td")
+        if len(cells) < 2:
+            continue
+        user_link = cells[0].find("a")
+        author = user_link.get_text(strip=True) if user_link else None
+        grade = cells[1].get_text(strip=True) or None
+        if grade:
+            ratings.append({
+                "route_id": route_id,
+                "author": author,
+                "grade": grade,
+                "scraped_at": now,
+            })
 
-    # Try plain text digit
-    text = cell.get_text(strip=True)
-    m = re.search(r"(\d)", text)
-    return int(m.group(1)) if m else None
+    return ratings
+
+
+def parse_stats_counts(html: str) -> tuple[int, int]:
+    """Return (tick_count, todo_count) from the stats page."""
+    soup = BeautifulSoup(html, "lxml")
+    ticks = len(soup.select("tr[id^='ticks.']"))
+    # To-do rows have no id prefix; they're in the table that only has single-cell rows
+    todos = 0
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if rows and all(len(r.find_all("td")) == 1 for r in rows):
+            todos = len(rows)
+            break
+    return ticks, todos
+
+
 
 
 # ---------------------------------------------------------------------------

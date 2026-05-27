@@ -49,6 +49,14 @@ CREATE TABLE IF NOT EXISTS ticks (
     scraped_at   TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS suggested_ratings (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    route_id   INTEGER REFERENCES routes(route_id),
+    author     TEXT,
+    grade      TEXT,
+    scraped_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS route_comments (
     comment_id INTEGER PRIMARY KEY AUTOINCREMENT,
     route_id   INTEGER REFERENCES routes(route_id),
@@ -123,6 +131,28 @@ def replace_ticks(conn: sqlite3.Connection, ticks: list[dict]) -> None:
         VALUES (:route_id, :author, :date_climbed, :tick_type, :stars, :comment, :scraped_at)
         """,
         ticks,
+    )
+    conn.commit()
+
+
+def replace_suggested_ratings(conn: sqlite3.Connection, ratings: list[dict]) -> None:
+    if not ratings:
+        return
+    conn.execute("DELETE FROM suggested_ratings WHERE route_id = ?", (ratings[0]["route_id"],))
+    conn.executemany(
+        """
+        INSERT INTO suggested_ratings (route_id, author, grade, scraped_at)
+        VALUES (:route_id, :author, :grade, :scraped_at)
+        """,
+        ratings,
+    )
+    conn.commit()
+
+
+def update_route_counts(conn: sqlite3.Connection, route_id: int, tick_count: int, todo_count: int) -> None:
+    conn.execute(
+        "UPDATE routes SET tick_count = ?, todo_count = ? WHERE route_id = ?",
+        (tick_count, todo_count, route_id),
     )
     conn.commit()
 

@@ -9,8 +9,6 @@ Examples:
 """
 
 import argparse
-import sys
-
 import db
 from crawler import Crawler
 
@@ -49,7 +47,8 @@ def main() -> None:
         crawler.crawl_area(args.url)
     except KeyboardInterrupt:
         print("\nInterrupted. Progress saved to climbing.db.")
-        sys.exit(0)
+    finally:
+        crawler.fetcher.close()
 
     # Quick summary
     areas = conn.execute("SELECT COUNT(*) FROM areas").fetchone()[0]

@@ -84,7 +84,7 @@ class Crawler:
 
         print(f"  [route] {route_url}")
         try:
-            html = self.fetcher.fetch_js(route_url)
+            html = self.fetcher.fetch(route_url)
         except Exception as e:
             print(f"    ERROR fetching route: {e}")
             return

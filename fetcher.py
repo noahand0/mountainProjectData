@@ -65,7 +65,11 @@ class Fetcher:
                 if route.request.resource_type in {"image", "media", "font", "stylesheet"}
                 else route.continue_(),
             )
-            page.goto(url, wait_until="networkidle", timeout=30000)
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            try:
+                page.wait_for_selector("tr[id^='ticks.']", timeout=10000)
+            except Exception:
+                pass
             html = page.content()
         except Exception:
             html = page.content()

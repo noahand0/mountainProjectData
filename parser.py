@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup, NavigableString, Comment
 
 MP_BASE = "https://www.mountainproject.com"
 
@@ -49,8 +49,19 @@ def parse_area(html: str, url: str) -> tuple[dict, list[str], list[str]]:
     area_id = _extract_id(url)
 
     # --- Name ---
+    # Use only direct text nodes — MP puts the area type in a child <span> and
+    # an HTML comment (<!--EDIT-...-->) in the h1; Comment is a NavigableString
+    # subclass, so we must exclude it explicitly.
     h1 = soup.find("h1")
-    name = h1.get_text(strip=True) if h1 else (soup.title.string or "").split("|")[0].strip()
+    if h1:
+        name = "".join(
+            t for t in h1.children
+            if isinstance(t, NavigableString) and not isinstance(t, Comment)
+        ).strip()
+        if not name:
+            name = h1.get_text(strip=True)
+    else:
+        name = (soup.title.string or "").split("|")[0].strip()
 
     # --- Coordinates ---
     # MP embeds lat/lon in JSON-LD or as data attributes on a map element
@@ -150,7 +161,7 @@ def parse_route(html: str, url: str) -> dict:
     # text nodes only to avoid appending that label to the grade string.
     grade_yds_tag = soup.find("span", class_="rateYDS")
     grade_vscale_tag = soup.find("span", class_="rateHueco")
-    grade_yds = (
+    raw_yds = (
         "".join(t for t in grade_yds_tag.children if isinstance(t, NavigableString)).strip()
         if grade_yds_tag else None
     ) or None
@@ -158,6 +169,13 @@ def parse_route(html: str, url: str) -> dict:
         "".join(t for t in grade_vscale_tag.children if isinstance(t, NavigableString)).strip()
         if grade_vscale_tag else None
     ) or None
+
+    # MP sometimes uses rateYDS for V-scale grades; route to the right column.
+    if raw_yds and re.match(r"^V", raw_yds, re.I):
+        grade_yds = None
+        grade_vscale = grade_vscale or raw_yds
+    else:
+        grade_yds = raw_yds
 
     parts = [g for g in [grade_yds, grade_vscale] if g]
     grade_raw = " ".join(parts) if parts else None
@@ -284,11 +302,22 @@ def parse_routes_from_area(html: str, area_id: int) -> list[dict]:
 
         name = link.get_text(strip=True)
 
-        # Grade — boulders use rateYDS for V-scale on the listing page
+        # Grade — MP uses the rateYDS CSS class for both YDS and V-scale grades
+        # on area listing pages. Route to the correct column by grade format.
         grade_tag = row.find("span", class_="rateYDS")
-        grade_yds = grade_tag.get_text(strip=True) if grade_tag else None
+        raw_grade = grade_tag.get_text(strip=True) if grade_tag else None
         hueco_tag = row.find("span", class_="rateHueco")
-        grade_vscale = hueco_tag.get_text(strip=True) if hueco_tag else None
+        raw_hueco = hueco_tag.get_text(strip=True) if hueco_tag else None
+
+        if raw_grade and re.match(r"^V", raw_grade, re.I):
+            grade_yds = None
+            grade_vscale = raw_grade
+        else:
+            grade_yds = raw_grade or None
+            grade_vscale = None
+        if raw_hueco:
+            grade_vscale = raw_hueco
+
         parts = [g for g in [grade_yds, grade_vscale] if g]
         grade_raw = " ".join(parts) if parts else None
 

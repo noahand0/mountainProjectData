@@ -50,11 +50,7 @@ def main() -> None:
     finally:
         crawler.fetcher.close()
 
-    # Quick summary
-    areas = conn.execute("SELECT COUNT(*) FROM areas").fetchone()[0]
-    routes = conn.execute("SELECT COUNT(*) FROM routes").fetchone()[0]
-    ticks = conn.execute("SELECT COUNT(*) FROM ticks").fetchone()[0]
-    print(f"\nDone. areas={areas}  routes={routes}  ticks={ticks}")
+    print(f"\nDone. {crawler._status()}")
 
 
 if __name__ == "__main__":

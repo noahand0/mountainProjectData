@@ -20,7 +20,13 @@ class Crawler:
         self.conn = conn
         self.fetcher = Fetcher(conn, delay=delay)
         self.skip_ticks = skip_ticks
-        self.deep_routes = deep_routes  # fetch individual route pages for full detail
+        self.deep_routes = deep_routes
+        self._n_areas = 0
+        self._n_routes = 0
+        self._n_ticks = 0
+
+    def _status(self) -> str:
+        return f"[areas: {self._n_areas}  routes: {self._n_routes}  ticks: {self._n_ticks:,}]"
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -52,6 +58,7 @@ class Crawler:
             area_dict, child_area_urls, route_urls = parser.parse_area(html, area_url)
             area_dict["parent_area_id"] = parent_id
             db.upsert_area(self.conn, area_dict)
+            self._n_areas += 1
 
             for child_url in child_area_urls:
                 child_id = parser._extract_id(child_url)
@@ -66,8 +73,9 @@ class Crawler:
                 routes = parser.parse_routes_from_area(html, area_id)
                 for route_dict in routes:
                     db.upsert_route(self.conn, route_dict)
+                self._n_routes += len(routes)
                 if routes:
-                    print(f"  extracted {len(routes)} routes from area page")
+                    print(f"  {len(routes)} routes  {self._status()}")
 
     # ------------------------------------------------------------------
     # Route crawl
@@ -92,6 +100,7 @@ class Crawler:
         route_dict = parser.parse_route(html, route_url)
         route_dict["area_id"] = area_id
         db.upsert_route(self.conn, route_dict)
+        self._n_routes += 1
 
         # Route-level comments (beta notes)
         comments = parser.parse_route_comments(html, route_id)
@@ -100,6 +109,7 @@ class Crawler:
 
         if not self.skip_ticks:
             self._crawl_ticks(route_id, route_url)
+        print(f"    {self._status()}")
 
     # ------------------------------------------------------------------
     # Ticks crawl  (/route/stats/{id}?page=N)
@@ -149,6 +159,7 @@ class Crawler:
 
         if all_ticks:
             db.replace_ticks(self.conn, all_ticks)
+            self._n_ticks += len(all_ticks)
             print(f"    saved {len(all_ticks)} ticks")
 
 

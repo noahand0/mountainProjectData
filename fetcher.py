@@ -4,7 +4,7 @@ import time
 import requests
 from datetime import datetime, timezone
 
-CRAWL_DELAY = 2.0  # seconds between live fetches; well under robots.txt's 60s but polite
+CRAWL_DELAY = 0.5  # seconds between live fetches; well under robots.txt's 60s but polite
 
 HEADERS = {
     "User-Agent": (

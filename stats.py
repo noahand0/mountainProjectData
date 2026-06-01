@@ -15,6 +15,7 @@ import db
 
 MIN_STAR_VOTES = 3
 MAX_RESULTS = 50
+PENALTY_EXPONENT = 0.1  # < 1 softens the popularity penalty; 1.0 = fully linear
 
 
 # ---------------------------------------------------------------------------
@@ -87,10 +88,11 @@ def compute_percentiles(routes: list[sqlite3.Row]) -> dict[int, float]:
 
 
 def hidden_gem_score(route: sqlite3.Row, popularity_percentile: float) -> float | None:
-    """Score = avg_stars × (1 − popularity_percentile_within_grade)."""
+    """Score = avg_stars × (1 − popularity_percentile)^PENALTY_EXPONENT.
+    The exponent softens the penalty so mid-popularity routes aren't crushed."""
     if (route["star_votes"] or 0) < MIN_STAR_VOTES:
         return None
-    return (route["avg_stars"] or 0) * (1.0 - popularity_percentile)
+    return (route["avg_stars"] or 0) * (1.0 - popularity_percentile) ** PENALTY_EXPONENT
 
 
 # ---------------------------------------------------------------------------

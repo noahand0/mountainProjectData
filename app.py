@@ -110,6 +110,38 @@ with st.sidebar:
             area_id = options[selected_name]
             area_name = selected_name
 
+    # Navigation: back to parent + drill down into children
+    if area_id is not None:
+        parent = conn.execute(
+            """SELECT a.area_id, a.name FROM areas a
+               JOIN areas cur ON cur.parent_area_id = a.area_id
+               WHERE cur.area_id = ?""",
+            (area_id,),
+        ).fetchone()
+        if parent:
+            if st.button(f"← {parent['name']}", use_container_width=True,
+                         key=f"up_{parent['area_id']}"):
+                st.session_state.area_pending = parent["name"]
+                st.rerun()
+
+        children = conn.execute(
+            """SELECT a.area_id, a.name
+               FROM areas a
+               LEFT JOIN routes r ON r.area_id = a.area_id
+               WHERE a.parent_area_id = ?
+               GROUP BY a.area_id, a.name
+               ORDER BY COUNT(r.route_id) DESC, a.name
+               LIMIT 8""",
+            (area_id,),
+        ).fetchall()
+        if len(children) >= 3:
+            st.caption("Sub-areas:")
+            for child in children:
+                if st.button(child["name"], use_container_width=True,
+                             key=f"sub_{child['area_id']}"):
+                    st.session_state.area_pending = child["name"]
+                    st.rerun()
+
     climb_type = st.radio("Type", ["Boulders", "Routes"], horizontal=True)
 
     min_grade: float | None = None

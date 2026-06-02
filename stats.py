@@ -15,7 +15,7 @@ import db
 
 MIN_STAR_VOTES = 3
 MAX_RESULTS = 50
-PENALTY_EXPONENT = 0.1  # < 1 softens the popularity penalty; 1.0 = fully linear
+PENALTY_EXPONENT = 0.3  # < 1 softens the popularity penalty; 1.0 = fully linear
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ def get_routes_in_area(conn: sqlite3.Connection, area_id: int) -> list[sqlite3.R
         UNION ALL
         SELECT a.area_id FROM areas a JOIN descendants d ON a.parent_area_id = d.area_id
     )
-    SELECT r.route_id, r.name, r.grade_vscale, r.grade_yds, r.grade_raw,
+    SELECT r.route_id, r.name, r.url, r.grade_vscale, r.grade_yds, r.grade_raw,
            r.avg_stars, r.star_votes, r.tick_count, r.todo_count, r.type,
            a.name AS area_name
     FROM routes r

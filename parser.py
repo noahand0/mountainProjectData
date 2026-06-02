@@ -64,25 +64,15 @@ def parse_area(html: str, url: str) -> tuple[dict, list[str], list[str]]:
         name = (soup.title.string or "").split("|")[0].strip()
 
     # --- Coordinates ---
-    # MP embeds lat/lon in JSON-LD or as data attributes on a map element
+    # MP links to Google Maps with a ?q=lat,lon parameter in a directions anchor.
     lat, lon = None, None
     coord_match = re.search(
-        r'"latitude"\s*:\s*([\-\d.]+).*?"longitude"\s*:\s*([\-\d.]+)',
+        r'maps\.google\.com/maps\?q=(-?\d+\.\d+),(-?\d+\.\d+)',
         html,
-        re.DOTALL,
     )
     if coord_match:
         lat = float(coord_match.group(1))
         lon = float(coord_match.group(2))
-    else:
-        # Fallback: look for a map element with data-lat / data-lng attributes
-        map_el = soup.find(attrs={"data-lat": True})
-        if map_el:
-            try:
-                lat = float(map_el["data-lat"])
-                lon = float(map_el["data-lng"])
-            except (KeyError, ValueError):
-                pass
 
     # --- Breadcrumb area IDs (ancestors; exclude from children) ---
     # MP's breadcrumb is in div.mb-half.small.text-warm inside the right column.

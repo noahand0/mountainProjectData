@@ -8,6 +8,7 @@ from __future__ import annotations
 import sqlite3
 
 import pandas as pd
+import pydeck as pdk
 import streamlit as st
 
 import db
@@ -23,6 +24,12 @@ from stats import (
 
 st.set_page_config(page_title="Climbing Hidden Gems", layout="wide")
 
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] { min-width: 220px; max-width: 220px; }
+</style>
+""", unsafe_allow_html=True)
+
 
 @st.cache_resource
 def get_connection() -> sqlite3.Connection:
@@ -36,11 +43,59 @@ def get_connection() -> sqlite3.Connection:
 conn = get_connection()
 
 
+def _compute_top_areas(conn: sqlite3.Connection, limit: int = 5) -> list[str]:
+    areas = conn.execute(
+        "SELECT area_id, parent_area_id, name FROM areas"
+    ).fetchall()
+    direct = dict(conn.execute(
+        "SELECT area_id, COUNT(*) FROM routes GROUP BY area_id"
+    ).fetchall())
+
+    name_of = {r["area_id"]: r["name"] for r in areas}
+    parent_of = {r["area_id"]: r["parent_area_id"] for r in areas}
+    children: dict[int, list[int]] = {aid: [] for aid in name_of}
+    for aid, pid in parent_of.items():
+        if pid is not None and pid in children:
+            children[pid].append(aid)
+
+    # Iterative bottom-up: process leaves first, propagate counts to parents.
+    totals = {aid: direct.get(aid, 0) for aid in name_of}
+    remaining_children = {aid: len(children[aid]) for aid in name_of}
+    queue = [aid for aid in name_of if remaining_children[aid] == 0]
+    while queue:
+        aid = queue.pop()
+        pid = parent_of.get(aid)
+        if pid is not None and pid in totals:
+            totals[pid] += totals[aid]
+            remaining_children[pid] -= 1
+            if remaining_children[pid] == 0:
+                queue.append(pid)
+
+    top = sorted(name_of, key=lambda aid: totals[aid], reverse=True)[:limit]
+    return [name_of[aid] for aid in top]
+
+
+TOP_AREAS = _compute_top_areas(conn)
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("Search")
+    # Apply any quick-start selection from the previous run BEFORE the widget
+    # renders — setting a widget key after instantiation raises an error.
+    if "area_pending" in st.session_state:
+        st.session_state["area_query"] = st.session_state["area_pending"]
+        del st.session_state["area_pending"]
 
-    area_query = st.text_input("Area name", placeholder="e.g. Yosemite Valley")
+    area_query = st.text_input("Area", placeholder="e.g. Yosemite Valley",
+                               key="area_query")
+
+    # Quick-start buttons shown only when the search box is empty
+    if not area_query:
+        st.caption("Popular areas:")
+        for name in TOP_AREAS:
+            if st.button(name, use_container_width=True, key=f"qs_{name}"):
+                st.session_state.area_pending = name
+                st.rerun()
 
     area_id: int | None = None
     area_name: str | None = None
@@ -51,14 +106,11 @@ with st.sidebar:
             st.warning("No areas found.")
         else:
             options = {r["name"]: r["area_id"] for r in matches}
-            selected_name = st.selectbox("Select area", list(options))
+            selected_name = st.selectbox("Select", list(options))
             area_id = options[selected_name]
             area_name = selected_name
 
-    st.divider()
-    st.header("Filters")
-
-    climb_type = st.radio("Climb type", ["Boulders", "Routes"], horizontal=True)
+    climb_type = st.radio("Type", ["Boulders", "Routes"], horizontal=True)
 
     min_grade: float | None = None
     max_grade: float | None = None
@@ -132,6 +184,8 @@ for r in filtered:
         "Votes": r["star_votes"],
         "Ticks": r["tick_count"],
         "Area": r["area_name"],
+        "lat": r["latitude"],
+        "lon": r["longitude"],
     })
 
 if not rows:
@@ -157,17 +211,76 @@ elif max_grade is not None:
 else:
     grade_note = ""
 st.subheader(f"{area_name} — {type_label}{grade_note}")
-col1, col2 = st.columns(2)
-col1.metric("Ranked", len(rows))
-col2.metric("Skipped (< 3 star votes)", skipped)
+m1, m2 = st.columns(2)
+m1.metric("Ranked", len(rows))
+m2.metric("Skipped (< 3 star votes)", skipped)
 
-# Results table
-st.dataframe(
-    df,
-    column_config={
-        "URL": st.column_config.LinkColumn("Link", display_text="View on MP"),
-        "Score": st.column_config.NumberColumn(format="%.2f"),
-        "Stars": st.column_config.NumberColumn(format="%.1f"),
-    },
-    use_container_width=True,
-)
+# ── Side-by-side: ranked list (left) + map (right) ───────────────────────────
+list_col, map_col = st.columns([2, 3])
+
+with list_col:
+    st.caption("Click a row to highlight it on the map.")
+    event = st.dataframe(
+        df.drop(columns=["lat", "lon"]),
+        column_config={
+            "URL": st.column_config.LinkColumn("Link", display_text="View on MP"),
+            "Score": st.column_config.NumberColumn(format="%.2f"),
+            "Stars": st.column_config.NumberColumn(format="%.1f"),
+        },
+        use_container_width=True,
+        height=600,
+        on_select="rerun",
+        selection_mode="single-row",
+    )
+
+with map_col:
+    map_data = df[["Route", "Grade", "Stars", "Ticks", "Score", "lat", "lon"]].dropna(
+        subset=["lat", "lon"]
+    )
+
+    if map_data.empty:
+        st.caption("No coordinates available.")
+    else:
+        # Determine which row (0-based) is selected
+        selected = event.selection.rows
+        sel_idx = selected[0] if selected else None
+
+        # Build a colour column: orange for selected, blue for everything else
+        map_data = map_data.copy()
+        map_data["Rank"] = map_data.index  # df.index is already 1-based
+        map_data["color"] = map_data.apply(
+            lambda row: [255, 100, 0, 255]
+            if row.name - 1 == sel_idx   # df.index is 1-based; sel_idx is 0-based
+            else [59, 130, 246, 180],
+            axis=1,
+        )
+        map_data["radius"] = map_data.apply(
+            lambda row: 120 if row.name - 1 == sel_idx else 60,
+            axis=1,
+        )
+
+        layer = pdk.Layer(
+            "ScatterplotLayer",
+            data=map_data,
+            get_position="[lon, lat]",
+            get_color="color",
+            get_radius="radius",
+            pickable=True,
+        )
+
+        view = pdk.ViewState(
+            latitude=map_data["lat"].mean(),
+            longitude=map_data["lon"].mean(),
+            zoom=11,
+            pitch=0,
+        )
+
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=[layer],
+                initial_view_state=view,
+                tooltip={"text": "#{Rank} {Route}\n{Grade}  ·  {Stars}★  ·  {Ticks} ticks"},
+            ),
+            use_container_width=True,
+            height=600,
+        )

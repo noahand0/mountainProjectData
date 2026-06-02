@@ -115,7 +115,7 @@ def get_routes_in_area(conn: sqlite3.Connection, area_id: int) -> list[sqlite3.R
     )
     SELECT r.route_id, r.name, r.url, r.grade_vscale, r.grade_yds, r.grade_raw,
            r.avg_stars, r.star_votes, r.tick_count, r.todo_count, r.type,
-           a.name AS area_name
+           a.name AS area_name, a.latitude, a.longitude
     FROM routes r
     JOIN areas a ON r.area_id = a.area_id
     WHERE r.area_id IN (SELECT area_id FROM descendants)

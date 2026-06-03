@@ -30,7 +30,7 @@ Structured storage for the full area hierarchy, route metadata, and per-route so
 | `suggested_ratings` | Grade suggestions submitted by users |
 
 Current dataset (Yosemite Valley + surrounding areas):
-- **1,139 areas**, **4,305 routes**, **174,090 ticks** from **18,880 unique users**
+- **1,143 areas**, **4,312 routes**, **174,160 ticks** from **18,881 unique users**
 - **35,777** suggested grade ratings
 
 ### 3. Hidden Gem Scoring Engine (`stats.py`)
@@ -85,9 +85,9 @@ The system was validated on Castle Rock Loop (San Jose, CA) — a small boulderi
 - The grade-relative scoring successfully distributes recommendations across V1–V6, rather than concentrating on a single difficulty
 
 ### Limitations
-- **Tick cap**: Mountain Project displays a maximum of 250 ticks per route. High-traffic routes are likely more popular than the data indicates, which slightly underestimates their popularity percentile.
 - **Grade bucket size**: The grade-relative percentile is only meaningful when a grade bucket contains enough routes. In small areas (< 50 routes), buckets may have 2–3 entries, making percentile values coarse.
 - **Webscraping speed**: The mountainproject.com stated query-rate on their "robots.txt" is once per minute, which is far too slow. However, in the name of at least somewhat respecting a limited query rate (especially because mountainproject is a completely free, and community run site), I imposed a query rate limiter of 1 second. This meant that the fastest I could possibly gather all of the date for, say Yosemite Valley, which has 1,800+ routes, is 30 minutes. In practice, the scraping and parsing took far longer than that per route, and getting yosemite into my dataset took running my computer overnight. For this reason, I opted to only gather a few major areas like that, just to show a proof of concept.
+- **Arbitrary Scoring Mechanism**: A very obvious next step to this project is to use a basic LLM to classify sentiment of comments on ticks and the climbs themselves. Comments are often where indications that a climb is underrated manifest most explicitly, e.g. "I don't know why this isn't more popular!". 
 
 ---
 

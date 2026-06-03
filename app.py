@@ -312,6 +312,7 @@ with map_col:
                 layers=[layer],
                 initial_view_state=view,
                 tooltip={"text": "#{Rank} {Route}\n{Grade}  ·  {Stars}★  ·  {Ticks} ticks"},
+                map_style="https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
             ),
             use_container_width=True,
             height=600,
